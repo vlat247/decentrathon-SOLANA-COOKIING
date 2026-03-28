@@ -1,26 +1,60 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-dm-sans);
+  --font-mono: var(--font-space-mono);
+
+  --color-lp-green: var(--green);
+  --color-lp-purple: var(--purple);
+  --color-lp-yellow: var(--yellow);
+  --color-lp-bg: var(--bg);
+  --color-lp-bg2: var(--bg2);
+  --color-lp-border: var(--border-color);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* Fallback Mockup specific vars for light mode */
+  --bg: #ffffff;
+  --bg2: #f8fafc;
+  --bg3: #f1f5f9;
+  --bg4: #e2e8f0;
+  --green: #00f5a0;
+  --purple: #a78bfa;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border-color: #e2e8f0;
+}
+
+.dark {
+  /* shadcn base */
+  --background: 0 0% 4%; /* #0a0b0f */
+  --foreground: 214 32% 89%; /* #e2e8f0 */
+  --border: 222 26% 15%; /* #1e2230 */
+  --primary: 160 100% 48%; /* #00f5a0 */
+
+  /* Mockup specific vars */
+  --bg: #0a0b0f;
+  --bg2: #111318;
+  --bg3: #1a1c24;
+  --bg4: #22252f;
+  --green: #00f5a0;
+  --purple: #a78bfa;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --text: #e2e8f0;
+  --muted: #64748b;
+  --border-color: #1e2230;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans), sans-serif;
 }
