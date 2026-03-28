@@ -20,10 +20,27 @@ MOCK_START_PRICES = {
 JUPITER_PRICE_URL = "https://price.jup.ag/v4/price"
 RAYDIUM_PAIRS_URL = "https://api.raydium.io/v2/main/pairs"
 
+# Solana devnet RPC
+SOLANA_RPC_URL  = "https://api.devnet.solana.com"
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+# CORS — origins allowed to call the API
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
 # HTTP client timeout (seconds)
-HTTP_TIMEOUT = 5.0
+HTTP_TIMEOUT = 2.0
 
 # StrategyEngine decision thresholds (0.0 – 1.0 score scale)
 SCORE_INCREASE = 0.70   # score >= this → INCREASE position
 SCORE_REDUCE   = 0.40   # score <= this → REDUCE position
 SCORE_EXIT     = 0.25   # score <= this → EXIT position
+
+# Simulation / backtesting constants
+FEE_TIER               = 0.003          # Raydium default pool fee (0.3%)
+POOL_VOLUME_ESTIMATE   = 2_000_000.0    # estimated daily pool volume (USD)
+POOL_LIQUIDITY_ESTIMATE = 10_000_000.0  # estimated total pool liquidity (USD)

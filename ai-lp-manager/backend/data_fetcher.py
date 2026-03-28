@@ -3,6 +3,7 @@ data_fetcher.py — Real market data fetcher with mock fallback
 Fetches SOL price, Raydium pool data, and price history for the AI LP Manager.
 """
 
+import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -72,11 +73,13 @@ async def fetch_pool_data(pool_id: str) -> dict:
         return result
 
     except Exception as exc:
-        sol_price = await fetch_sol_price()
+        mock_price = config.MOCK_START_PRICES.get(
+            pool_id.split("-")[0].upper(), random.uniform(10, 200)
+        )
         mock = {
             "id":         pool_id,
             "apy":        random.uniform(15, 80),
-            "price":      sol_price,
+            "price":      mock_price * (1 + random.uniform(-0.05, 0.05)),
             "volume_24h": random.uniform(500_000, 5_000_000),
             "liquidity":  random.uniform(1_000_000, 20_000_000),
             "volatility": random.uniform(0.03, 0.12),
@@ -91,12 +94,8 @@ async def fetch_pool_data(pool_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def fetch_all_pools() -> list:
-    """Fetch data for every pool defined in config.POOLS."""
-    results = []
-    for pool_id in config.POOLS:
-        data = await fetch_pool_data(pool_id)
-        results.append(data)
-    return results
+    """Fetch data for every pool defined in config.POOLS — all in parallel."""
+    return list(await asyncio.gather(*[fetch_pool_data(p) for p in config.POOLS]))
 
 
 # ---------------------------------------------------------------------------

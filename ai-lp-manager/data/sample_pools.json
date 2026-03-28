@@ -1,0 +1,29 @@
+[
+  {
+    "id": "SOL-USDC",
+    "name": "SOL / USDC",
+    "apy": 34.5,
+    "price": 158.2,
+    "volume_24h": 2400000,
+    "liquidity": 12000000,
+    "volatility": 0.06
+  },
+  {
+    "id": "RAY-USDC",
+    "name": "RAY / USDC",
+    "apy": 52.1,
+    "price": 5.4,
+    "volume_24h": 890000,
+    "liquidity": 3200000,
+    "volatility": 0.09
+  },
+  {
+    "id": "mSOL-USDC",
+    "name": "mSOL / USDC",
+    "apy": 18.7,
+    "price": 163.1,
+    "volume_24h": 1100000,
+    "liquidity": 7800000,
+    "volatility": 0.05
+  }
+]
