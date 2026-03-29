@@ -41,6 +41,9 @@ async def _rpc(method: str, params: list) -> dict:
         if "error" in body:
             raise RuntimeError(f"RPC error [{method}]: {body['error']}")
         return body["result"]
+    
+    # Fallback to satisfy linter, though unreachable
+    return {}
 
 
 # ---------------------------------------------------------------------------
