@@ -82,6 +82,18 @@ class SimulatePositionRequest(BaseModel):
     amount_usdc: float = Field(500.0, gt=0, example=500.0)
 
 
+class ContractPositionRequest(BaseModel):
+    pubkey:  str
+    pool_id: str
+
+
+class PrepareTransactionRequest(BaseModel):
+    pubkey:  str
+    pool_id: str
+    action:  str
+    score:   int
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -207,6 +219,30 @@ async def market_data():
         "pools":     pools,
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
     }
+
+
+# ── Contract Interaction ──────────────────────────────────────────────────
+
+@app.get("/api/contract/position", tags=["Contract"])
+async def get_position(owner: str, pool_id: str):
+    """
+    Fetch LpPosition on-chain data for a specific owner + pool_id.
+    """
+    return await solana_client.get_lp_position(owner, pool_id)
+
+
+@app.post("/api/contract/prepare-transaction", tags=["Contract"])
+async def prepare_transaction(req: PrepareTransactionRequest):
+    """
+    Generate transaction instructions for the AI LP Manager contract.
+    Body: {pubkey, pool_id, action, score}
+    """
+    return await solana_client.prepare_lp_transaction(
+        pubkey=req.pubkey,
+        pool_id=req.pool_id,
+        action=req.action,
+        score=req.score,
+    )
 
 
 # ---------------------------------------------------------------------------

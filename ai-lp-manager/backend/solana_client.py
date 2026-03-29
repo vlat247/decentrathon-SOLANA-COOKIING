@@ -12,8 +12,11 @@ Functions:
 """
 
 import random
-
+import base64
+import struct
+import base58
 import httpx
+from solders.pubkey import Pubkey
 
 import config
 
@@ -166,4 +169,57 @@ async def simulate_add_liquidity(
         "estimated_apy":       round(random.uniform(15.0, 60.0), 2),
         "network":             "devnet",
         "note":                "Simulation only - no real transaction executed",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. Contract Account Fetching
+# ---------------------------------------------------------------------------
+
+async def get_lp_position(owner_pubkey: str, pool_id: str) -> dict:
+    """
+    Check if a position exists on-chain for the given owner and pool.
+    """
+    try:
+        program_id = Pubkey.from_string(config.LP_MANAGER_PROGRAM_ID)
+        owner = Pubkey.from_string(owner_pubkey)
+        
+        # Derive PDA: [owner, pool_id_bytes]
+        pda, _ = Pubkey.find_program_address(
+            [bytes(owner), pool_id.encode("utf-8")],
+            program_id
+        )
+        
+        # In a real app, we would fetch the account data here:
+        # account_info = await _rpc("getAccountInfo", [str(pda), {"encoding": "base64"}])
+        
+        return {
+            "owner": owner_pubkey,
+            "pool_id": pool_id,
+            "pda": str(pda),
+            "exists": False, # Setting to False as it's not deployed yet
+            "message": "PDA derived. Contract deployment required for data fetching."
+        }
+    except Exception as e:
+        return {"exists": False, "error": str(e)}
+
+
+async def prepare_lp_transaction(pubkey: str, pool_id: str, action: str, score: int) -> dict:
+    """
+    Prepare serialized instruction data for the frontend to sign.
+    """
+    # This would typically return:
+    # {
+    #   "programId": config.LP_MANAGER_PROGRAM_ID,
+    #   "data": base64_encoded_instruction_data,
+    #   "accounts": [...]
+    # }
+    return {
+        "programId": config.LP_MANAGER_PROGRAM_ID,
+        "instructions": [{
+            "action": action,
+            "score":  score,
+            "pool":   pool_id,
+        }],
+        "note": "Transaction instructions prepared for wallet signing."
     }
