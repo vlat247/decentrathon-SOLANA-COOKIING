@@ -3,6 +3,7 @@ data_fetcher.py — Real market data fetcher with mock fallback
 Fetches SOL price, Raydium pool data, and price history for the AI LP Manager.
 """
 
+import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -31,7 +32,40 @@ async def fetch_sol_price() -> float:
         price = random.uniform(140, 180)
         print(f"[MOCK] SOL price: ${price:.4f}  (reason: {exc})")
         return price
+    
+    # Fallback to satisfy linter
+    return 150.0
 
+
+# Cache for Raydium pairs list to avoid redundant huge downloads
+class PairsCache:
+    data: list | None = None
+    expiry: datetime = datetime.fromtimestamp(0, tz=timezone.utc)
+    lock: asyncio.Lock = asyncio.Lock()
+
+_pairs_cache = PairsCache()
+
+async def _get_pairs() -> list:
+    """Helper to fetch Raydium pairs with a 60-second cache and concurrency lock."""
+    async with _pairs_cache.lock:
+        now = datetime.now(tz=timezone.utc)
+        
+        if _pairs_cache.data is not None and now < _pairs_cache.expiry:
+            return _pairs_cache.data
+        
+        try:
+            async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
+                resp = await client.get(config.RAYDIUM_PAIRS_URL)
+                resp.raise_for_status()
+                data = resp.json()
+                _pairs_cache.data = data
+                _pairs_cache.expiry = now + timedelta(seconds=60)
+                return data
+        except Exception as exc:
+            print(f"[ERROR] Failed to fetch pairs from Raydium: {exc}")
+            return []
+    
+    return [] # Satisfy linter
 
 # ---------------------------------------------------------------------------
 # 2. Single pool data
@@ -43,11 +77,8 @@ async def fetch_pool_data(pool_id: str) -> dict:
     Returns mock data on any error or if the pool is not found.
     """
     try:
-        async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
-            resp = await client.get(config.RAYDIUM_PAIRS_URL)
-            resp.raise_for_status()
-            pairs = resp.json()  # list of pair dicts
-
+        pairs = await _get_pairs()
+        
         # Find the matching pair by name field
         match = next(
             (p for p in pairs if p.get("name", "").upper() == pool_id.upper()),
@@ -72,11 +103,13 @@ async def fetch_pool_data(pool_id: str) -> dict:
         return result
 
     except Exception as exc:
-        sol_price = await fetch_sol_price()
+        mock_price = config.MOCK_START_PRICES.get(
+            pool_id.split("-")[0].upper(), random.uniform(10, 200)
+        )
         mock = {
             "id":         pool_id,
             "apy":        random.uniform(15, 80),
-            "price":      sol_price,
+            "price":      mock_price * (1 + random.uniform(-0.05, 0.05)),
             "volume_24h": random.uniform(500_000, 5_000_000),
             "liquidity":  random.uniform(1_000_000, 20_000_000),
             "volatility": random.uniform(0.03, 0.12),
@@ -91,12 +124,11 @@ async def fetch_pool_data(pool_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def fetch_all_pools() -> list:
-    """Fetch data for every pool defined in config.POOLS."""
-    results = []
-    for pool_id in config.POOLS:
-        data = await fetch_pool_data(pool_id)
-        results.append(data)
-    return results
+    """
+    Fetch data for all configured pools.
+    Optimized: Uses cached pairs list and parallelizes individual fetches.
+    """
+    return list(await asyncio.gather(*[fetch_pool_data(p) for p in config.POOLS]))
 
 
 # ---------------------------------------------------------------------------

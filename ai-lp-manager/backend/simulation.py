@@ -1,248 +1,207 @@
 """
-simulation.py — LP Position Simulator for AI LP Manager
+simulation.py — Backtesting Engine for AI LP Manager
 
-Provides:
-  - Impermanent loss calculation (Uniswap v2 / constant-product model)
-  - Fee income estimation
-  - Net PnL over a given horizon
-  - Multi-step Monte Carlo / GBM price-path simulation
+Compares AI-managed LP strategy vs a passive baseline (set-and-forget)
+over a historical price series.
+
+Class: SimulationEngine
+  run(pool_id, initial_amount, days, price_history) -> dict
 """
 
 import math
-import random
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+
+import numpy as np
+
+import config
+from ai_engine import get_engine
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-@dataclass
-class LPPosition:
-    """Represents an open LP position."""
-    pool_id: str
-    token_a: str
-    token_b: str
-    initial_price: float          # Price of token_a in token_b at entry
-    current_price: float          # Latest market price
-    liquidity_usd: float          # Total liquidity deposited (USD)
-    fee_tier: float = 0.003       # e.g. 0.003 = 0.3%
-    days_active: int = 1
-    volume_24h: float = 1_000_000.0
-    apy: float = 30.0             # Annualised fee APY (%)
-
-
-@dataclass
-class SimulationResult:
-    """Result bundle returned by simulate_position()."""
-    pool_id: str
-    initial_value_usd: float
-    current_value_usd: float
-    impermanent_loss_pct: float      # negative = loss
-    fee_income_usd: float
-    net_pnl_usd: float
-    net_pnl_pct: float
-    hold_value_usd: float            # value if user had just HODL'd
-    price_path: list[dict] = field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# 1. Impermanent Loss
-# ---------------------------------------------------------------------------
-
-def calc_impermanent_loss(price_ratio: float) -> float:
+class SimulationEngine:
     """
-    Compute impermanent loss for a constant-product (v2) LP.
+    Backtests an AI LP strategy against a passive baseline.
 
-    price_ratio = current_price / initial_price
+    Both strategies start with `initial_amount` USD split 50/50
+    between token_a and USDC at inception.
 
-    Returns IL as a fraction (negative number means loss).
-    Formula: IL = 2*sqrt(k) / (1 + k) - 1  where k = price_ratio
+    Baseline: never rebalances — just absorbs IL and earns fees.
+    AI:       calls StrategyEngine.decide() each day and acts on the signal.
     """
-    if price_ratio <= 0:
-        return -1.0
-    k = price_ratio
-    il = (2.0 * math.sqrt(k)) / (1.0 + k) - 1.0
-    return il  # e.g. -0.057 = -5.7% loss relative to HODL
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-def lp_value_after_il(initial_value: float, price_ratio: float) -> float:
-    """USD value of LP position after price moves by price_ratio."""
-    il = calc_impermanent_loss(price_ratio)
-    return initial_value * (1.0 + il)
+    @staticmethod
+    def _impermanent_loss(price_ratio: float) -> float:
+        """
+        Standard constant-product IL formula.
 
+        Returns IL as a negative fraction, e.g. -0.057 = −5.7% loss vs HODL.
+        """
+        if price_ratio <= 0:
+            return -1.0
+        k = price_ratio
+        return (2.0 * math.sqrt(k)) / (1.0 + k) - 1.0
 
-# ---------------------------------------------------------------------------
-# 2. Fee Income
-# ---------------------------------------------------------------------------
+    @staticmethod
+    def _daily_fee(position_value: float) -> float:
+        """
+        Estimate one day's fee income for `position_value` USD of liquidity.
 
-def calc_fee_income(
-    liquidity_usd: float,
-    volume_24h: float,
-    fee_tier: float,
-    days: int,
-) -> float:
-    """
-    Estimate fee income earned over `days`.
+        fee = pool_volume × fee_tier × (position / pool_liquidity)
+        """
+        share = position_value / max(config.POOL_LIQUIDITY_ESTIMATE, 1.0)
+        return config.POOL_VOLUME_ESTIMATE * config.FEE_TIER * share
 
-    fees_per_day = (liquidity_share_of_pool) × volume_24h × fee_tier
-    We approximate share = 1 (single position owns all liquidity — conservative).
-    For a realistic estimate, callers should pass volume/liquidity ratio themselves.
-    """
-    daily_fee_rate = (volume_24h * fee_tier) / max(liquidity_usd, 1.0)
-    daily_fee_rate = min(daily_fee_rate, 1.0)   # cap at 100%/day for sanity
-    return liquidity_usd * daily_fee_rate * days
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
 
+    def run(
+        self,
+        pool_id: str,
+        initial_amount: float,
+        days: int,
+        price_history: list,
+    ) -> dict:
+        """
+        Run the backtest simulation.
 
-# ---------------------------------------------------------------------------
-# 3. Full position simulation (single snapshot)
-# ---------------------------------------------------------------------------
+        Parameters
+        ----------
+        pool_id        : identifier of the pool (e.g. "SOL-USDC")
+        initial_amount : position size in USD at inception
+        days           : number of days to simulate
+        price_history  : list of dicts with at least a "price" key,
+                         ordered oldest → newest (hourly or daily granularity)
 
-def simulate_position(position: LPPosition) -> SimulationResult:
-    """
-    Simulate the current state of an LP position.
+        Returns
+        -------
+        dict with "summary" and "timeline" keys.
+        """
+        engine = get_engine()
 
-    Returns a SimulationResult with IL, fees, and net PnL.
-    """
-    price_ratio = position.current_price / max(position.initial_price, 1e-9)
+        # ── Chunk price_history into daily buckets ──────────────────────
+        # If hourly data (24× len), take one point per day (last hour).
+        total_points = len(price_history)
+        points_per_day = max(1, total_points // max(days, 1))
 
-    # LP value (with IL baked in)
-    current_lp_value = lp_value_after_il(position.liquidity_usd, price_ratio)
+        daily_history: list[dict] = [
+            price_history[min(i * points_per_day, total_points - 1)]
+            for i in range(days)
+        ]
 
-    # What the user would have if they just held 50/50 spot
-    hold_value = position.liquidity_usd * (
-        0.5 + 0.5 * price_ratio   # 50% in token_b (stable), 50% in token_a
-    )
+        # ── Initial state ───────────────────────────────────────────────
+        initial_price: float = float(daily_history[0]["price"]) if daily_history else 1.0
 
-    il_pct = calc_impermanent_loss(price_ratio) * 100.0  # as percentage
+        baseline_value: float = initial_amount
+        ai_value:       float = initial_amount
 
-    fee_income = calc_fee_income(
-        position.liquidity_usd,
-        position.volume_24h,
-        position.fee_tier,
-        position.days_active,
-    )
+        # Track AI-managed position separately so EXIT actually freezes it
+        ai_exited      = False
+        ai_exit_value  = 0.0
 
-    net_pnl_usd = (current_lp_value + fee_income) - position.liquidity_usd
-    net_pnl_pct = (net_pnl_usd / max(position.liquidity_usd, 1.0)) * 100.0
+        timeline:       list[dict] = []
+        total_il_baseline = 0.0
+        total_il_ai       = 0.0
 
-    return SimulationResult(
-        pool_id=position.pool_id,
-        initial_value_usd=position.liquidity_usd,
-        current_value_usd=round(current_lp_value, 4),
-        impermanent_loss_pct=round(il_pct, 4),
-        fee_income_usd=round(fee_income, 4),
-        net_pnl_usd=round(net_pnl_usd, 4),
-        net_pnl_pct=round(net_pnl_pct, 4),
-        hold_value_usd=round(hold_value, 4),
-    )
+        now = datetime.now(tz=timezone.utc)
 
+        # Pool stub used by the AI engine
+        pool_data = {
+            "id":         pool_id,
+            "apy":        config.POOL_VOLUME_ESTIMATE * config.FEE_TIER * 365
+                          / config.POOL_LIQUIDITY_ESTIMATE * 100,
+            "volatility": 0.05,
+        }
 
-# ---------------------------------------------------------------------------
-# 4. Price-path simulation (GBM / Monte Carlo)
-# ---------------------------------------------------------------------------
+        # ── Day loop ────────────────────────────────────────────────────
+        for day_idx in range(days):
+            today_price = float(daily_history[day_idx]["price"])
+            date_str    = (now + timedelta(days=day_idx - days)).date().isoformat()
 
-def simulate_price_path(
-    start_price: float,
-    days: int = 30,
-    daily_vol: float = 0.05,
-    drift: float = 0.0,
-    steps_per_day: int = 24,
-    seed: Optional[int] = None,
-) -> list[dict]:
-    """
-    Simulate a Geometric Brownian Motion price path.
+            # Impermanent loss relative to inception price
+            price_ratio = today_price / max(initial_price, 1e-9)
+            il_fraction = self._impermanent_loss(price_ratio)           # e.g. -0.057
+            il_pct      = round(il_fraction * 100.0, 4)
 
-    Parameters
-    ----------
-    start_price   : starting asset price
-    days          : number of days to simulate
-    daily_vol     : daily volatility (e.g. 0.05 = 5%)
-    drift         : daily drift / expected return (e.g. 0.001)
-    steps_per_day : hourly by default
-    seed          : optional RNG seed for reproducibility
+            il_loss_baseline = initial_amount * abs(il_fraction)
+            il_loss_ai       = ai_value * abs(il_fraction) if not ai_exited else 0.0
 
-    Returns a list of {timestamp, price, pct_change} dicts.
-    """
-    if seed is not None:
-        random.seed(seed)
+            # Fee income for each strategy
+            fee_baseline = self._daily_fee(baseline_value)
+            fee_ai       = self._daily_fee(ai_value) if not ai_exited else 0.0
 
-    dt = 1.0 / steps_per_day          # fraction of a day per step
-    hourly_vol = daily_vol * math.sqrt(dt)
-    hourly_drift = drift * dt
+            # ── AI decision (based on last ≤7 days of closing prices) ──
+            lookback_start     = max(0, day_idx - 6)
+            last_7_daily       = daily_history[lookback_start: day_idx + 1]
+            # Expand back to price-dict format the engine expects
+            last_7_price_dicts = [{"price": float(p["price"])} for p in last_7_daily]
 
-    now = datetime.now(tz=timezone.utc)
-    total_steps = days * steps_per_day
-    path: list[dict] = []
-    price = start_price
+            if not ai_exited:
+                decision = engine.decide(pool_data, last_7_price_dicts)
+                action   = decision["action"]
 
-    for step in range(total_steps):
-        ts = now + timedelta(hours=step)
-        shock = random.gauss(0.0, 1.0)
-        # GBM: ln(S_t) = ln(S_{t-1}) + (μ - σ²/2)dt + σ√dt·Z
-        log_return = (hourly_drift - 0.5 * hourly_vol ** 2) + hourly_vol * shock
-        price = price * math.exp(log_return)
-        price = max(price, 0.001)
+                if action == "EXIT":
+                    # Freeze the AI position — no more IL, no more fees
+                    ai_exit_value = ai_value
+                    ai_exited     = True
+                    fee_ai        = 0.0
+                    il_loss_ai    = 0.0
+                elif action == "REDUCE":
+                    ai_value -= ai_value * 0.30      # withdraw 30%
+                elif action == "INCREASE":
+                    ai_value += ai_value * 0.10      # add 10% (assume available cash)
+                # HOLD → no adjustment
+            else:
+                action = "EXIT"   # already exited
 
-        pct_change = ((price - start_price) / start_price) * 100.0
+            # ── Apply daily P&L ────────────────────────────────────────
+            baseline_value = baseline_value + fee_baseline - il_loss_baseline
+            baseline_value = max(baseline_value, 0.0)
 
-        path.append(
-            {
-                "timestamp": ts.isoformat(),
-                "price": round(price, 6),
-                "pct_change": round(pct_change, 4),
-            }
-        )
+            if not ai_exited:
+                ai_value = ai_value + fee_ai - il_loss_ai
+                ai_value = max(ai_value, 0.0)
 
-    return path
+            total_il_baseline += il_loss_baseline
+            total_il_ai       += il_loss_ai
 
+            # ── Daily snapshot ─────────────────────────────────────────
+            timeline.append(
+                {
+                    "day":            day_idx + 1,
+                    "date":           date_str,
+                    "price":          round(today_price, 4),
+                    "ai_value":       round(ai_value if not ai_exited else ai_exit_value, 4),
+                    "baseline_value": round(baseline_value, 4),
+                    "action":         action,
+                    "il_pct":         il_pct,
+                    "fee_income":     round(fee_ai, 4),
+                }
+            )
 
-# ---------------------------------------------------------------------------
-# 5. Batch simulation helper
-# ---------------------------------------------------------------------------
+        # ── Final AI value (frozen if exited) ──────────────────────────
+        final_ai       = ai_exit_value if ai_exited else ai_value
+        final_baseline = baseline_value
 
-def simulate_pool_scenarios(
-    pool: dict,
-    scenarios: Optional[list[float]] = None,
-) -> list[dict]:
-    """
-    Run IL + fee simulations across a range of price ratio scenarios.
+        ai_return_pct       = (final_ai       - initial_amount) / initial_amount * 100
+        baseline_return_pct = (final_baseline - initial_amount) / initial_amount * 100
+        difference_pct      = ai_return_pct - baseline_return_pct
+        total_il_avoided    = max(0.0, total_il_baseline - total_il_ai)
 
-    pool      : dict from fetch_pool_data() / fetch_all_pools()
-    scenarios : list of price ratios to test (default: 0.5x → 2x)
+        summary = {
+            "pool_id":            pool_id,
+            "initial_amount":     initial_amount,
+            "ai_final":           round(final_ai, 4),
+            "baseline_final":     round(final_baseline, 4),
+            "ai_return_pct":      round(ai_return_pct, 4),
+            "baseline_return_pct": round(baseline_return_pct, 4),
+            "difference_pct":     round(difference_pct, 4),
+            "ai_wins":            difference_pct > 0,
+            "total_il_avoided":   round(total_il_avoided, 4),
+            "days":               days,
+        }
 
-    Returns list of scenario result dicts.
-    """
-    if scenarios is None:
-        scenarios = [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0]
-
-    results = []
-    base_price = pool.get("price", 100.0)
-    liquidity = pool.get("liquidity", 1_000_000.0)
-    volume_24h = pool.get("volume_24h", 1_000_000.0)
-
-    for ratio in scenarios:
-        pos = LPPosition(
-            pool_id=pool.get("id", "unknown"),
-            token_a="SOL",
-            token_b="USDC",
-            initial_price=base_price,
-            current_price=base_price * ratio,
-            liquidity_usd=liquidity,
-            days_active=30,
-            volume_24h=volume_24h,
-        )
-        sim = simulate_position(pos)
-        results.append(
-            {
-                "price_ratio": ratio,
-                "final_price": round(base_price * ratio, 4),
-                "il_pct": sim.impermanent_loss_pct,
-                "fee_income_usd": sim.fee_income_usd,
-                "net_pnl_pct": sim.net_pnl_pct,
-                "net_pnl_usd": sim.net_pnl_usd,
-            }
-        )
-    return results
+        return {"summary": summary, "timeline": timeline}
