@@ -26,6 +26,8 @@ TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 # Contract program ID (placeholder — update after anchor build)
 LP_MANAGER_PROGRAM_ID = "CSjDhZXoYAeSa8mtsy7xgSRVqq2Bbeb9jSwf9RP5QVN6"
+PROGRAM_ID = "CSjDhZXoYAeSa8mtsy7xgSRVqq2Bbeb9jSwf9RP5QVN6"
+SOLANA_EXPLORER_BASE = "https://explorer.solana.com/tx/{}?cluster=devnet"
 
 # CORS — origins allowed to call the API
 ALLOWED_ORIGINS = [

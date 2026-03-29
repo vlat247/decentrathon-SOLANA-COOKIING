@@ -181,7 +181,7 @@ async def get_lp_position(owner_pubkey: str, pool_id: str) -> dict:
     Check if a position exists on-chain for the given owner and pool.
     """
     try:
-        program_id = Pubkey.from_string(config.LP_MANAGER_PROGRAM_ID)
+        program_id = Pubkey.from_string(config.PROGRAM_ID)
         owner = Pubkey.from_string(owner_pubkey)
         
         # Derive PDA: [owner, pool_id_bytes]
@@ -215,7 +215,7 @@ async def prepare_lp_transaction(pubkey: str, pool_id: str, action: str, score: 
     #   "accounts": [...]
     # }
     return {
-        "programId": config.LP_MANAGER_PROGRAM_ID,
+        "programId": config.PROGRAM_ID,
         "instructions": [{
             "action": action,
             "score":  score,

@@ -245,6 +245,19 @@ async def prepare_transaction(req: PrepareTransactionRequest):
     )
 
 
+@app.get("/api/contract/info", tags=["Contract"])
+async def contract_info():
+    """
+    Return basic information about the deployed Solana program.
+    """
+    return {
+        "program_id": config.PROGRAM_ID,
+        "network": "devnet",
+        "explorer_url": f"https://explorer.solana.com/address/{config.PROGRAM_ID}?cluster=devnet",
+        "status": "deployed"
+    }
+
+
 # ---------------------------------------------------------------------------
 # WebSocket — live price stream
 # ---------------------------------------------------------------------------
