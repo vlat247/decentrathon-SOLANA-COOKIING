@@ -24,6 +24,9 @@ RAYDIUM_PAIRS_URL = "https://api.raydium.io/v2/main/pairs"
 SOLANA_RPC_URL  = "https://api.devnet.solana.com"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
+# Contract program ID (placeholder — update after anchor build)
+LP_MANAGER_PROGRAM_ID = "CSjDhZXoYAeSa8mtsy7xgSRVqq2Bbeb9jSwf9RP5QVN6"
+
 # CORS — origins allowed to call the API
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
