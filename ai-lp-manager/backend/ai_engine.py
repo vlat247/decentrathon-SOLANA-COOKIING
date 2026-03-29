@@ -180,3 +180,8 @@ class StrategyEngine:
 def get_engine() -> StrategyEngine:
     """Return a new StrategyEngine instance."""
     return StrategyEngine()
+
+def analyse_pool(a, *args, **kwargs): return {}
+def analyse_all_pools(a, *args, **kwargs): return []
+def recommend_range(a, *args, **kwargs): return {}
+

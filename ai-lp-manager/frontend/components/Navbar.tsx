@@ -2,11 +2,40 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { fetchWallet } from "../api/wallet";
 
 export default function Navbar() {
   const pathname = usePathname();
-  const [walletConnected, setWalletConnected] = useState(false);
+  const { publicKey, connected } = useWallet();
+  const { connection } = useConnection();
+  const [walletData, setWalletData] = useState<any>(null);
+  const [nativeBalance, setNativeBalance] = useState<number | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (connected && publicKey) {
+      // Fetch native balance over RPC so it works even if backend is offline
+      connection.getBalance(publicKey)
+        .then(lamports => setNativeBalance(lamports / LAMPORTS_PER_SOL))
+        .catch(console.error);
+
+      // Background payload for AI integration
+      fetchWallet(publicKey.toBase58())
+        .then(data => setWalletData(data))
+        .catch(console.error);
+    } else {
+      setWalletData(null);
+      setNativeBalance(null);
+    }
+  }, [connected, publicKey, connection]);
 
   return (
     <nav className="flex items-center justify-between px-6 border-b border-lp-border bg-[var(--bg)] z-10 pt-[3px]">
@@ -29,12 +58,16 @@ export default function Navbar() {
           );
         })}
       </div>
-      <button 
-        onClick={() => setWalletConnected(!walletConnected)}
-        className={`font-mono text-[11px] px-3.5 py-1.5 bg-transparent border border-[var(--purple)] text-[var(--purple)] rounded-md cursor-pointer tracking-[1px] transition-all duration-200 ${walletConnected ? '!bg-[var(--purple)] !text-white' : 'hover:bg-[var(--purple)] hover:text-white'}`}
-      >
-        {walletConnected ? '4xKj...9mPQ' : 'Connect Phantom'}
-      </button>
+      <div className="flex gap-4 items-center">
+        {(nativeBalance !== null || walletData) && (
+          <span className="font-mono text-[11px] text-[var(--green)]">
+            {(nativeBalance ?? walletData?.solBalance ?? 0).toFixed(2)} SOL
+          </span>
+        )}
+        <div className="wallet-btn-container z-50">
+          {mounted && <WalletMultiButton />}
+        </div>
+      </div>
     </nav>
   );
 }

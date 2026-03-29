@@ -3,54 +3,40 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
-export default function LivePriceChart() {
+export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: number | null, liveSignal?: string | null }) {
   const [data, setData] = useState<any[]>([]);
 
   useEffect(() => {
-    let base = 185;
+    // initialize historical base array
+    let base = livePrice ?? 185;
     const initialData = [];
-    for (let i = 0; i < 50; i++) {
-      base += (Math.random() - 0.48) * 2;
-      
-      const r = Math.random();
-      let dotColor = 'transparent';
-      let dotRadius = 0;
-      if (r < 0.12) { dotColor = '#00f5a0'; dotRadius = 5; }
-      else if (r < 0.2) { dotColor = '#f87171'; dotRadius = 5; }
-      else if (r < 0.3) { dotColor = '#fbbf24'; dotRadius = 5; }
-
-      initialData.push({
-        price: +base.toFixed(2),
-        dotColor,
-        dotRadius
-      });
+    for (let i = 0; i < 30; i++) {
+        base += (Math.random() - 0.48) * 2;
+        initialData.push({ price: +base.toFixed(2), dotColor: 'transparent', dotRadius: 0 });
     }
     setData(initialData);
+  }, []); // Only on mount
 
-    const interval = setInterval(() => {
-      setData(prev => {
+  // Watch for new data
+  useEffect(() => {
+    if (!livePrice) return;
+    
+    setData(prev => {
         const newData = [...prev.slice(1)];
-        const lastBase = newData[newData.length - 1].price;
-        const nextPrice = lastBase + (Math.random() - 0.48) * 0.8;
-        
-        const r = Math.random();
         let dotColor = 'transparent';
         let dotRadius = 0;
-        if (r < 0.12) { dotColor = '#00f5a0'; dotRadius = 5; }
-        else if (r < 0.2) { dotColor = '#f87171'; dotRadius = 5; }
-        else if (r < 0.3) { dotColor = '#fbbf24'; dotRadius = 5; }
+        if (liveSignal === 'INCREASE') { dotColor = '#00f5a0'; dotRadius = 5; }
+        else if (liveSignal === 'EXIT') { dotColor = '#f87171'; dotRadius = 5; }
+        else if (liveSignal === 'HOLD') { dotColor = '#fbbf24'; dotRadius = 5; }
         
         newData.push({
-          price: +nextPrice.toFixed(2),
+          price: +(livePrice).toFixed(2),
           dotColor,
           dotRadius
         });
         return newData;
-      });
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, []);
+    });
+  }, [livePrice, liveSignal]);
 
   const renderDot = (props: any) => {
     const { cx, cy, payload } = props;
@@ -63,7 +49,7 @@ export default function LivePriceChart() {
   return (
     <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4">
       <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px] mb-3">SOL/USDC — Live Price + AI Decisions</div>
-      <div className="relative h-[180px] w-full">
+      <div className="relative h-[180px] w-full min-h-[180px] min-w-[200px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
             <defs>

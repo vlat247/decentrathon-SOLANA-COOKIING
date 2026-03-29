@@ -2,32 +2,40 @@
 
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
+import { runSimulation } from "../../api/simulate";
 
 export default function Simulate() {
   const [running, setRunning] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [amount, setAmount] = useState<number>(10000);
   const [days, setDays] = useState<number>(30);
+  const [poolUI, setPoolUI] = useState<string>("SOL / USDC");
+  const [strategy, setStrategy] = useState<string>("Balanced");
   const [simData, setSimData] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const runSim = () => {
+  const runSim = async () => {
     setRunning(true);
     setShowResults(false);
-    setTimeout(() => {
-      const db = [];
-      const base2 = [amount];
-      const ai2 = [amount];
-      for (let i = 1; i < days; i++) {
-        base2.push(+(base2[i-1] * (1 + (Math.random() * .003 - .0008))).toFixed(2));
-        ai2.push(+(ai2[i-1] * (1 + (Math.random() * .006 + .001))).toFixed(2));
-      }
-      for (let i = 0; i < days; i++) {
-        db.push({ name: `D${i+1}`, base: base2[i], ai: ai2[i] });
-      }
-      setSimData(db);
+    setError(null);
+    try {
+      const poolId = poolUI.replace(" / ", "-");
+      const data = await runSimulation({ amount, days, pool: poolId, strategy });
+      
+      const chartData = data.timeline.map((t: any) => ({
+        name: `D${t.day}`,
+        base: t.baseline_value,
+        ai: t.ai_value
+      }));
+      setSimData(chartData);
+      setSummary(data.summary);
       setShowResults(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
       setRunning(false);
-    }, 1400);
+    }
   };
 
   return (
@@ -58,7 +66,9 @@ export default function Simulate() {
           </div>
           <div className="flex items-center gap-2.5">
             <div className="text-[12px] text-[var(--muted)] w-[110px] shrink-0">Pool</div>
-            <select className="flex-1 bg-[var(--bg3)] border border-lp-border rounded-md px-2.5 py-[7px] text-[13px] text-[var(--text)] font-sans outline-none focus:border-[var(--purple)] [&>option]:bg-[var(--bg3)]">
+            <select 
+              value={poolUI} onChange={(e) => setPoolUI(e.target.value)}
+              className="flex-1 bg-[var(--bg3)] border border-lp-border rounded-md px-2.5 py-[7px] text-[13px] text-[var(--text)] font-sans outline-none focus:border-[var(--purple)] [&>option]:bg-[var(--bg3)]">
               <option>SOL / USDC</option>
               <option>SOL / USDT</option>
               <option>RAY / SOL</option>
@@ -67,7 +77,9 @@ export default function Simulate() {
           </div>
           <div className="flex items-center gap-2.5">
             <div className="text-[12px] text-[var(--muted)] w-[110px] shrink-0">Strategy</div>
-            <select className="flex-1 bg-[var(--bg3)] border border-lp-border rounded-md px-2.5 py-[7px] text-[13px] text-[var(--text)] font-sans outline-none focus:border-[var(--purple)] [&>option]:bg-[var(--bg3)]">
+            <select 
+              value={strategy} onChange={(e) => setStrategy(e.target.value)}
+              className="flex-1 bg-[var(--bg3)] border border-lp-border rounded-md px-2.5 py-[7px] text-[13px] text-[var(--text)] font-sans outline-none focus:border-[var(--purple)] [&>option]:bg-[var(--bg3)]">
               <option>Aggressive (wide range)</option>
               <option>Balanced</option>
               <option>Conservative (narrow)</option>
@@ -83,37 +95,40 @@ export default function Simulate() {
         </div>
       </div>
 
-      {showResults && (
+      {error && <div className="text-[var(--red)] text-[13px] mt-2 font-mono">Error: {error}</div>}
+
+      {showResults && summary && (
         <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4 mt-4">
           <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px] mb-3">
-            Results — <span>{days} Days · SOL/USDC · ${amount.toLocaleString()}</span>
+            Results — <span>{days} Days · {poolUI} · ${amount.toLocaleString()}</span>
           </div>
           
           <div className="grid grid-cols-2 gap-2.5">
             <div className="rounded-lg p-3 bg-[rgba(100,116,139,0.1)] border border-[rgba(100,116,139,0.2)]">
               <div className="text-[10px] tracking-[1px] mb-2 font-mono text-[var(--muted)]">Without AI</div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Gross Return</span><span>+8.4%</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Impermanent Loss</span><span className="text-[var(--red)]">−6.2%</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Net Profit</span><span>+$218</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-none"><span className="text-[var(--muted)]">Final Value</span><span>$10,218</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Gross Return</span><span>{summary.baseline_return_pct > 0 ? '+' : ''}{summary.baseline_return_pct.toFixed(2)}%</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Net Profit</span><span>{summary.baseline_final - amount > 0 ? '+' : ''}${(summary.baseline_final - amount).toFixed(0)}</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-none"><span className="text-[var(--muted)]">Final Value</span><span>${summary.baseline_final.toLocaleString()}</span></div>
             </div>
             
             <div className="rounded-lg p-3 bg-[rgba(0,245,160,0.07)] border border-[rgba(0,245,160,0.2)]">
               <div className="text-[10px] tracking-[1px] mb-2 font-mono text-[var(--green)]">With AI Strategy</div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Gross Return</span><span className="text-[var(--green)]">+23.7%</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Impermanent Loss</span><span className="text-[var(--green)]">−1.4%</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Net Profit</span><span className="text-[var(--green)]">+$2,370</span></div>
-              <div className="flex justify-between py-1 text-[12px] border-none"><span className="text-[var(--muted)]">Final Value</span><span className="text-[var(--green)]">$12,370</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Gross Return</span><span className={summary.ai_return_pct > 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>{summary.ai_return_pct > 0 ? '+' : ''}{summary.ai_return_pct.toFixed(2)}%</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">IL Avoided</span><span className="text-[var(--green)]">${summary.total_il_avoided.toFixed(2)}</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-b border-[rgba(255,255,255,0.04)]"><span className="text-[var(--muted)]">Net Profit</span><span className={summary.ai_final - amount > 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>{summary.ai_final - amount > 0 ? '+' : ''}${(summary.ai_final - amount).toFixed(0)}</span></div>
+              <div className="flex justify-between py-1 text-[12px] border-none"><span className="text-[var(--muted)]">Final Value</span><span className="text-[var(--green)]">${summary.ai_final.toLocaleString()}</span></div>
             </div>
           </div>
           
-          <div className="text-center p-2.5 bg-[rgba(0,245,160,0.08)] border border-[rgba(0,245,160,0.2)] rounded-lg font-mono text-[11px] text-[var(--green)] tracking-[1px] mt-3">
-            ✦ AI STRATEGY OUTPERFORMS BY +$2,152 · +21.5%
+          <div className="text-center p-2.5 bg-[rgba(0,245,160,0.08)] border border-[rgba(0,245,160,0.2)] rounded-lg font-mono text-[11px] text-[var(--green)] tracking-[1px] mt-3 uppercase">
+            {summary.ai_wins 
+              ? `✦ AI STRATEGY OUTPERFORMS BY +$${((summary.ai_final - summary.baseline_final)).toFixed(0)} · +${summary.difference_pct.toFixed(1)}%`
+              : `✦ AI STRATEGY UNDERPERFORMS BY -$${((summary.baseline_final - summary.ai_final)).toFixed(0)}`}
           </div>
 
           <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px] mt-4 mb-3">Performance Over Time</div>
           
-          <div className="relative h-[160px] w-full">
+          <div className="relative h-[160px] w-full min-h-[160px] min-w-[200px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={simData}>
                 <defs>
