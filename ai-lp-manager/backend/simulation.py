@@ -133,14 +133,14 @@ class SimulationEngine:
             fee_baseline = self._daily_fee(baseline_value)
             fee_ai       = self._daily_fee(ai_value) if not ai_exited else 0.0
 
-            # ── AI decision (based on last ≤7 days of closing prices) ──
-            lookback_start     = max(0, day_idx - 6)
-            last_7_daily       = daily_history[lookback_start: day_idx + 1]
+            # ── AI decision (based on last ≤21 days of closing prices) ──
+            lookback_start     = max(0, day_idx - 20)
+            last_21_daily      = daily_history[lookback_start: day_idx + 1]
             # Expand back to price-dict format the engine expects
-            last_7_price_dicts = [{"price": float(p["price"])} for p in last_7_daily]
+            recent_price_dicts = [{"price": float(p["price"])} for p in last_21_daily]
 
             if not ai_exited:
-                decision = engine.decide(pool_data, last_7_price_dicts)
+                decision = engine.decide(pool_data, recent_price_dicts)
                 action   = decision["action"]
 
                 if action == "EXIT":
