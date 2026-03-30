@@ -7,3 +7,7 @@ node_modules/
 dist/
 .DS_Store
 integration_tests/
+PROJECT_EXPLAINED.md
+RUN_GUIDE.md
+start_all.sh
+stop_all.sh
