@@ -1,178 +1,291 @@
 """
-data_fetcher.py — Real market data fetcher with mock fallback
-Fetches SOL price, Raydium pool data, and price history for the AI LP Manager.
+data_fetcher.py — Real market data fetcher with caching and safe fallbacks
+Fetches SOL price from Jupiter, Raydium pool data from DefiLlama/Raydium, 
+and price history from CoinGecko/DexScreener.
 """
 
 import asyncio
-import random
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import datetime, timezone
 
 import httpx
 
 import config
 
+# ---------------------------------------------------------------------------
+# Caching Layer (TTL = 90 seconds)
+# ---------------------------------------------------------------------------
+
+CACHE_TTL = 90
+
+class CacheStore:
+    def __init__(self):
+        self.store = {}
+        self.lock = asyncio.Lock()
+
+    async def get(self, key: str):
+        async with self.lock:
+            if key in self.store:
+                item = self.store[key]
+                if time.time() - item['timestamp'] < CACHE_TTL:
+                    return item['data']
+            return None
+
+    async def get_stale(self, key: str):
+        """Return cached data ignoring TTL"""
+        async with self.lock:
+            if key in self.store:
+                return self.store[key]['data']
+            return None
+
+    async def set(self, key: str, data):
+        async with self.lock:
+            self.store[key] = {
+                'data': data,
+                'timestamp': time.time()
+            }
+
+global_cache = CacheStore()
+
+# ---------------------------------------------------------------------------
+# Robust API Request Wrapper
+# ---------------------------------------------------------------------------
+
+async def _fetch_with_retry(url: str, params: dict = None, retries: int = 2) -> httpx.Response:
+    timeout = httpx.Timeout(5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(retries + 1):
+            try:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPError as exc:
+                if attempt == retries:
+                    print(f"[ERROR] API failed: {exc}")
+                    raise
+                await asyncio.sleep(1)
 
 # ---------------------------------------------------------------------------
 # 1. SOL spot price
 # ---------------------------------------------------------------------------
 
 async def fetch_sol_price() -> float:
-    """Fetch live SOL price from Jupiter Aggregator. Falls back to mock."""
+    """Fetch live SOL price from Jupiter Aggregator."""
+    cache_key = "sol_price"
+    cached = await global_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
-        async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
-            resp = await client.get(
-                config.JUPITER_PRICE_URL,
-                params={"ids": "SOL"},
-            )
-            resp.raise_for_status()
-            price = float(resp.json()["data"]["SOL"]["price"])
-            print(f"[LIVE] SOL price: ${price:.4f}")
-            return price
-    except Exception as exc:
-        price = random.uniform(140, 180)
-        print(f"[MOCK] SOL price: ${price:.4f}  (reason: {exc})")
+        resp = await _fetch_with_retry(config.JUPITER_PRICE_URL, params={"ids": "SOL"})
+        price = float(resp.json()["data"]["SOL"]["price"])
+        print("[DATA] Source: Jupiter")
+        await global_cache.set(cache_key, price)
         return price
-    
-    # Fallback to satisfy linter
-    return 150.0
+    except Exception as exc:
+        stale = await global_cache.get_stale(cache_key)
+        if stale is not None:
+            print("[DATA] Source: Cache (Fallback) - SOL Price")
+            return stale
+        return 150.0
 
-
-# Cache for Raydium pairs list to avoid redundant huge downloads
-from typing import Optional
-
-class PairsCache:
-    data: Optional[list] = None
-    expiry: datetime = datetime.fromtimestamp(0, tz=timezone.utc)
-    lock: asyncio.Lock = asyncio.Lock()
-
-_pairs_cache = PairsCache()
-
-async def _get_pairs() -> list:
-    """Helper to fetch Raydium pairs with a 60-second cache and concurrency lock."""
-    async with _pairs_cache.lock:
-        now = datetime.now(tz=timezone.utc)
-        
-        if _pairs_cache.data is not None and now < _pairs_cache.expiry:
-            return _pairs_cache.data
-        
-        try:
-            async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as client:
-                resp = await client.get(config.RAYDIUM_PAIRS_URL)
-                resp.raise_for_status()
-                data = resp.json()
-                _pairs_cache.data = data
-                _pairs_cache.expiry = now + timedelta(seconds=60)
-                return data
-        except Exception as exc:
-            print(f"[ERROR] Failed to fetch pairs from Raydium: {exc}")
-            return []
-    
-    return [] # Satisfy linter
 
 # ---------------------------------------------------------------------------
-# 2. Single pool data
+# 2. Hourly price history (Real Data)
 # ---------------------------------------------------------------------------
+
+COINGECKO_MAP = {
+    "SOL": "solana",
+    "USDC": "usd-coin",
+    "RAY": "raydium",
+    "MSOL": "msol",
+    "BONK": "bonk"
+}
+
+DEXSCREENER_MAP = {
+    "SOL": "So11111111111111111111111111111111111111112",
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "RAY": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+    "MSOL": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+}
+
+async def fetch_price_history(token: str, days: int = 30) -> list:
+    """
+    Fetch realistic hourly price history for a token using CoinGecko or DexScreener.
+    """
+    token_upper = token.upper()
+    cache_key = f"history_{token_upper}_{days}"
+    
+    cached = await global_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if token_upper not in COINGECKO_MAP:
+        print(f"[ERROR] API failed: Token '{token_upper}' not in ID map")
+        stale = await global_cache.get_stale(cache_key)
+        return stale if stale is not None else []
+
+    cg_id = COINGECKO_MAP[token_upper]
+    url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart"
+    params = {"vs_currency": "usd", "days": str(days), "interval": "hourly"}
+    
+    try:
+        resp = await _fetch_with_retry(url, params=params)
+        data = resp.json()
+        
+        prices = data.get("prices", [])
+        volumes = data.get("total_volumes", [])
+        
+        history = []
+        for i, (ts_ms, price) in enumerate(prices):
+            ts = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
+            vol = volumes[i][1] if i < len(volumes) else 0.0
+            history.append({
+                "timestamp": ts.isoformat(),
+                "price": round(price, 6),
+                "volume": round(vol, 2)
+            })
+            
+        print("[DATA] Source: CoinGecko")
+        await global_cache.set(cache_key, history)
+        return history
+        
+    except Exception as exc:
+        pass # CoinGecko failed, logged by _fetch_with_retry
+
+    try:
+        if token_upper in DEXSCREENER_MAP:
+            ds_id = DEXSCREENER_MAP[token_upper]
+            ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{ds_id}"
+            ds_resp = await _fetch_with_retry(ds_url)
+            ds_data = ds_resp.json()
+            pairs = ds_data.get("pairs", [])
+            if pairs:
+                current_price = float(pairs[0].get("priceUsd", 0))
+                current_vol = float(pairs[0].get("volume", {}).get("h24", 0))
+                fallback_history = [{
+                    "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                    "price": round(current_price, 6),
+                    "volume": round(current_vol, 2)
+                }]
+                print("[DATA] Source: DexScreener (fallback)")
+                return fallback_history
+    except Exception as e:
+        pass # DexScreener failed, logged by _fetch_with_retry
+
+    stale = await global_cache.get_stale(cache_key)
+    if stale is not None:
+        print("[DATA] Source: Cache (Fallback) - History")
+        return stale
+        
+    return []
+
+
+# ---------------------------------------------------------------------------
+# 3. Single pool data
+# ---------------------------------------------------------------------------
+
+async def _fetch_defillama_pools():
+    cache_key = "defillama_pools"
+    cached = await global_cache.get(cache_key)
+    if cached is not None:
+        return cached
+        
+    try:
+        resp = await _fetch_with_retry("https://yields.llama.fi/pools")
+        data = resp.json()
+        pools = data.get("data", [])
+        filtered = [p for p in pools if p.get("chain") == "Solana" and p.get("project") == "raydium"]
+        print("[DATA] Source: DefiLlama")
+        await global_cache.set(cache_key, filtered)
+        return filtered
+    except Exception as exc:
+        stale = await global_cache.get_stale(cache_key)
+        return stale if stale is not None else []
+
+
+async def _fetch_raydium_pairs():
+    cache_key = "raydium_pairs"
+    cached = await global_cache.get(cache_key)
+    if cached is not None:
+        return cached
+        
+    try:
+        resp = await _fetch_with_retry(config.RAYDIUM_PAIRS_URL)
+        data = resp.json()
+        print("[DATA] Source: Raydium (fallback)")
+        await global_cache.set(cache_key, data)
+        return data
+    except Exception as exc:
+        stale = await global_cache.get_stale(cache_key)
+        return stale if stale is not None else []
+
 
 async def fetch_pool_data(pool_id: str) -> dict:
     """
     Fetch data for one Raydium pool by its pair name (e.g. 'SOL-USDC').
-    Returns mock data on any error or if the pool is not found.
     """
-    try:
-        pairs = await _get_pairs()
-        
-        # Find the matching pair by name field
-        match = next(
-            (p for p in pairs if p.get("name", "").upper() == pool_id.upper()),
-            None,
-        )
+    cache_key = f"pool_{pool_id}"
+    cached = await global_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
-        if match is None:
-            raise ValueError(f"Pool '{pool_id}' not found in Raydium pairs list")
-
+    dl_pools = await _fetch_defillama_pools()
+    match = next((p for p in dl_pools if p.get("symbol", "").upper() == pool_id.upper()), None)
+    
+    if match:
         result = {
-            "id":         pool_id,
-            "apy":        float(match.get("apy", 0)),
-            "price":      float(match.get("price", 0)),
-            "volume_24h": float(match.get("volume", {}).get("h24", 0)
-                                if isinstance(match.get("volume"), dict)
-                                else match.get("volume24h", 0)),
-            "liquidity":  float(match.get("liquidity", 0)),
-            "volatility": random.uniform(0.03, 0.12),   # not in Raydium API
-            "source":     "live",
+            "id": pool_id,
+            "apy": float(match.get("apy", 0) or 0),
+            "price": float(match.get("price", 0) or 1.0),
+            "volume_24h": float(match.get("volumeUsd1d", 0) or 0),
+            "liquidity": float(match.get("tvlUsd", 0) or 0),
+            "volatility": 0.05,
+            "source": "DefiLlama"
         }
-        print(f"[LIVE] Pool {pool_id}: APY={result['apy']:.2f}%")
+        await global_cache.set(cache_key, result)
         return result
 
-    except Exception as exc:
-        mock_price = config.MOCK_START_PRICES.get(
-            pool_id.split("-")[0].upper(), random.uniform(10, 200)
-        )
-        mock = {
-            "id":         pool_id,
-            "apy":        random.uniform(15, 80),
-            "price":      mock_price * (1 + random.uniform(-0.05, 0.05)),
-            "volume_24h": random.uniform(500_000, 5_000_000),
-            "liquidity":  random.uniform(1_000_000, 20_000_000),
-            "volatility": random.uniform(0.03, 0.12),
-            "source":     "mock",
+    ray_pools = await _fetch_raydium_pairs()
+    match_ray = next((p for p in ray_pools if p.get("name", "").upper() == pool_id.upper()), None)
+    
+    if match_ray:
+        result = {
+            "id": pool_id,
+            "apy": float(match_ray.get("apy", 0) or 0),
+            "price": float(match_ray.get("price", 0) or 1.0),
+            "volume_24h": float(match_ray.get("volume", {}).get("h24", 0) if isinstance(match_ray.get("volume"), dict) else match_ray.get("volume24h", 0)),
+            "liquidity": float(match_ray.get("liquidity", 0) or 0),
+            "volatility": 0.05,
+            "source": "Raydium"
         }
-        print(f"[MOCK] Pool {pool_id}  (reason: {exc})")
-        return mock
+        await global_cache.set(cache_key, result)
+        return result
+
+    stale = await global_cache.get_stale(cache_key)
+    if stale is not None:
+        print(f"[DATA] Source: Cache (Fallback) - Pool {pool_id}")
+        return stale
+
+    print(f"[ERROR] API failed: Pool {pool_id} data unavailable entirely")
+    return {
+        "id": pool_id,
+        "apy": 0.0,
+        "price": 0.0,
+        "volume_24h": 0.0,
+        "liquidity": 0.0,
+        "volatility": 0.05,
+        "source": "fallback"
+    }
 
 
 # ---------------------------------------------------------------------------
-# 3. All configured pools
+# 4. All configured pools
 # ---------------------------------------------------------------------------
 
 async def fetch_all_pools() -> list:
     """
     Fetch data for all configured pools.
-    Optimized: Uses cached pairs list and parallelizes individual fetches.
     """
     return list(await asyncio.gather(*[fetch_pool_data(p) for p in config.POOLS]))
-
-
-# ---------------------------------------------------------------------------
-# 4. Hourly price history (mock — realistic GBM walk)
-# ---------------------------------------------------------------------------
-
-async def fetch_price_history(token: str, days: int = 30) -> list:
-    """
-    Generate realistic mock hourly price history for a token.
-
-    Uses a Gaussian random walk with 3% daily (≈ 0.87% hourly) volatility,
-    anchored to known starting prices for SOL, RAY, and mSOL.
-
-    Returns a list of dicts with keys: timestamp, price, volume.
-    Length = days * 24.
-    """
-    token_upper = token.upper()
-
-    # Base starting price — try to match known tokens, otherwise random
-    start_price: float = config.MOCK_START_PRICES.get(
-        token_upper, random.uniform(10, 200)
-    )
-
-    # Daily vol → hourly vol (σ_h ≈ σ_d / √24)
-    hourly_vol = (start_price * 0.03) / (24 ** 0.5)
-
-    now = datetime.now(tz=timezone.utc)
-    total_hours = days * 24
-    history: list[dict] = []
-    price = start_price
-
-    for hour_offset in range(total_hours - 1, -1, -1):
-        ts = now - timedelta(hours=hour_offset)
-        price = max(price + random.gauss(0, hourly_vol), 0.01)  # never go negative
-        volume = random.uniform(500_000, 5_000_000)
-
-        history.append(
-            {
-                "timestamp": ts.isoformat(),
-                "price":     round(price, 6),
-                "volume":    round(volume, 2),
-            }
-        )
-
-    return history

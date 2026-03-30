@@ -153,9 +153,13 @@ async def simulate_add_liquidity(
     try:
         sol_price = await fetch_sol_price()
     except Exception:
-        sol_price = 150.0    # safe fallback
+        sol_price = 0.0    # safe fallback that doesn't hallucinate data
 
-    sol_amount  = (amount_usdc / 2.0) / sol_price
+    if sol_price > 0:
+        sol_amount  = (amount_usdc / 2.0) / sol_price
+    else:
+        sol_amount = 0.0
+        
     usdc_amount = amount_usdc / 2.0
 
     return {
@@ -166,7 +170,7 @@ async def simulate_add_liquidity(
         "sol_amount":          round(sol_amount, 6),
         "usdc_amount":         round(usdc_amount, 2),
         "estimated_lp_tokens": round(amount_usdc / 10.0, 4),
-        "estimated_apy":       round(random.uniform(15.0, 60.0), 2),
+        "estimated_apy":       0.0, # Removed random.uniform simulation
         "network":             "devnet",
         "note":                "Simulation only - no real transaction executed",
     }

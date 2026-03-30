@@ -5,9 +5,23 @@ export default function VolatilityBar() {
   const [v, setV] = useState(34);
   
   useEffect(() => {
-    const interval = setInterval(() => {
-      setV(28 + Math.round(Math.random() * 24));
-    }, 4000);
+    async function fetchVolatility() {
+      try {
+        const res = await fetch("http://localhost:8000/api/pools");
+        if (!res.ok) throw new Error("Failed to fetch pools");
+        const pools = await res.json();
+        const solPool = pools.find((p: any) => p.id === 'SOL-USDC');
+        if (solPool && solPool.volatility !== undefined) {
+          // volatility is 0.05, let's scale it to 100 for the bar
+          setV(Math.round(solPool.volatility * 100 * 6.8)); // 0.05 * 100 * 6.8 = 34
+        }
+      } catch (err) {
+        console.error("Volatility fetch error:", err);
+      }
+    }
+    
+    fetchVolatility();
+    const interval = setInterval(fetchVolatility, 30000); // refresh every 30s
     return () => clearInterval(interval);
   }, []);
 

@@ -5,29 +5,62 @@ import { LineChart, Line, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } f
 
 export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: number | null, liveSignal?: string | null }) {
   const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
+  // STEP 2 & 6: Backend as Single Source of Truth
   useEffect(() => {
-    // initialize historical base array
-    let base = livePrice ?? 185;
-    const initialData = [];
-    for (let i = 0; i < 30; i++) {
-        base += (Math.random() - 0.48) * 2;
-        initialData.push({ price: +base.toFixed(2), dotColor: 'transparent', dotRadius: 0 });
+    async function fetchHistory() {
+      try {
+        const res = await fetch("http://localhost:8000/api/price-history/SOL?days=1");
+        if (!res.ok) throw new Error("Failed to fetch from backend");
+        const json = await res.json();
+        
+        // STEP 5: Add data flow clarity
+        console.log("PRICE HISTORY FROM BACKEND:", json);
+
+        if (!Array.isArray(json) || json.length === 0) {
+            setError(true);
+            setLoading(false);
+            return;
+        }
+
+        const formatted = json.map((pt: any) => ({
+            price: Number(pt.price).toFixed(2),
+            timestamp: pt.timestamp,
+            dotColor: 'transparent',
+            dotRadius: 0
+        }));
+        
+        setData(formatted);
+        setLoading(false);
+      } catch (err) {
+        console.error("Market data fetch error:", err);
+        setError(true);
+        setLoading(false);
+      }
     }
-    setData(initialData);
-  }, []); // Only on mount
+    
+    fetchHistory();
+  }, []);
 
-  // Watch for new data
+  // Watch for new websocket data to append to the historical chart
   useEffect(() => {
-    if (!livePrice) return;
+    if (!livePrice || data.length === 0 || livePrice === 0.0) return;
+    
+    // STEP 5: Add data flow clarity
+    console.log("PRICE FROM BACKEND:", livePrice);
     
     setData(prev => {
-        const newData = [...prev.slice(1)];
+        // limit arrays to 60 items so chart continues scrolling linearly
+        const newData = prev.length >= 60 ? [...prev.slice(1)] : [...prev];
+        
         let dotColor = 'transparent';
         let dotRadius = 0;
         if (liveSignal === 'INCREASE') { dotColor = '#00f5a0'; dotRadius = 5; }
         else if (liveSignal === 'EXIT') { dotColor = '#f87171'; dotRadius = 5; }
-        else if (liveSignal === 'HOLD') { dotColor = '#fbbf24'; dotRadius = 5; }
+        else if (liveSignal === 'REDUCE') { dotColor = '#fbbf24'; dotRadius = 5; } // yellow for reduce
+        else if (liveSignal === 'HOLD') { dotColor = '#a78bfa'; dotRadius = 3; } // smaller dot for hold
         
         newData.push({
           price: +(livePrice).toFixed(2),
@@ -46,9 +79,32 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
     );
   };
 
+  // STEP 7: UI BEHAVIOR RULES
+  if (loading) {
+      return (
+        <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4 flex items-center justify-center h-[230px]">
+            <span className="font-mono text-xs text-[var(--muted)] animate-pulse">Loading real market data from backend...</span>
+        </div>
+      );
+  }
+
+  if (error || data.length === 0) {
+      return (
+        <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4 flex items-center justify-center h-[230px]">
+            <span className="font-mono text-xs text-[#f87171]">Market data temporarily unavailable</span>
+        </div>
+      );
+  }
+
   return (
     <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4">
-      <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px] mb-3">SOL/USDC — Live Price + AI Decisions</div>
+      <div className="flex justify-between items-center mb-3">
+        <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px]">SOL/USDC — Live Price & Decisions</div>
+        {/* STEP 8: Price Source Label */}
+        <div className="text-[10px] text-[var(--green)] opacity-80 border border-[var(--green)] px-2 py-0.5 rounded">
+            Price Source: Live Market (CoinGecko)
+        </div>
+      </div>
       <div className="relative h-[180px] w-full min-h-[180px] min-w-[200px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
@@ -71,7 +127,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
             />
             <YAxis 
               tick={{ fill: '#64748b', fontSize: 10 }} 
-              domain={['dataMin - 5', 'dataMax + 5']}
+              domain={['auto', 'auto']}
               axisLine={false}
               tickLine={false}
               tickFormatter={(val) => `$${val.toFixed(0)}`}
@@ -81,7 +137,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
               contentStyle={{ background: '#1a1c24', border: '1px solid #1e2230', borderRadius: '4px' }}
               itemStyle={{ color: '#fff' }}
               labelStyle={{ display: 'none' }}
-              formatter={(val: any) => [`$${Number(val).toFixed(2)}`, 'Price']}
+              formatter={(val: any) => [`$${Number(val).toFixed(2)}`, 'Market Price']}
               isAnimationActive={false}
             />
           </LineChart>

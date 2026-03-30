@@ -9,12 +9,7 @@ POOLS = [
     "mSOL-SOL",
 ]
 
-# Starting prices for mock price history generation
-MOCK_START_PRICES = {
-    "SOL":  150.0,
-    "RAY":  5.0,
-    "mSOL": 160.0,
-}
+
 
 # API endpoints
 JUPITER_PRICE_URL = "https://price.jup.ag/v4/price"
