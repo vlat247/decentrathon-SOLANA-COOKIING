@@ -38,8 +38,10 @@ async def fetch_sol_price() -> float:
 
 
 # Cache for Raydium pairs list to avoid redundant huge downloads
+from typing import Optional
+
 class PairsCache:
-    data: list | None = None
+    data: Optional[list] = None
     expiry: datetime = datetime.fromtimestamp(0, tz=timezone.utc)
     lock: asyncio.Lock = asyncio.Lock()
 
