@@ -275,7 +275,7 @@ async def ws_prices(websocket: WebSocket):
         while True:
             sol_price, price_history = await asyncio.gather(
                 fetch_sol_price(),
-                fetch_price_history(token="SOL", days=7),
+                fetch_price_history(token="SOL", days=30),
             )
 
             pool_data = {

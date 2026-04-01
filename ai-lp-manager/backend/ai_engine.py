@@ -40,32 +40,45 @@ class StrategyEngine:
             }
 
         prices = [float(p["price"]) for p in price_history if "price" in p]
+        sample_size = len(prices)
         
-        # We need at least 20 periods for the long moving average
-        if len(prices) < 20:
+        # Hard minimum: need at least 30 periods for statistically significant indicators
+        MIN_PERIODS = 30
+        LOW_CONFIDENCE_THRESHOLD = 50  # Below this, flag reduced confidence
+        
+        if sample_size < MIN_PERIODS:
             return self._build_response(
                 "HOLD", 0.0,
-                "Warming up: Insufficient price history for long-term indicators (requires 20 periods).",
-                0.0, 0.0
+                f"Insufficient data: Only {sample_size} price points available "
+                f"(minimum {MIN_PERIODS} required for statistically significant trend/volatility indicators).",
+                0.0, 0.0, sample_size=sample_size
             )
 
         current_price = prices[-1]
+        low_sample = sample_size < LOW_CONFIDENCE_THRESHOLD
 
         # ------------------------------------------------------------------
         # 2. Compute Technical Indicators
         # ------------------------------------------------------------------
         
+        # Use adaptive window sizes based on available data
+        short_window = min(10, sample_size // 3)
+        long_window = min(30, sample_size)
+        momentum_window = min(10, sample_size // 3)
+        
         # A. Trend (Moving Averages)
-        short_ma = float(np.mean(prices[-5:]))
-        long_ma = float(np.mean(prices[-20:]))
+        short_ma = float(np.mean(prices[-short_window:]))
+        long_ma = float(np.mean(prices[-long_window:]))
         
         # B. Volatility (Standard Deviation of returns)
         arr = np.array(prices)
         returns = np.diff(arr) / arr[:-1]
-        volatility = float(np.std(returns[-20:]))
+        vol_window = min(30, len(returns))
+        volatility = float(np.std(returns[-vol_window:]))
         
-        # C. Momentum (Price change over last 5 periods)
-        momentum = float((current_price - prices[-6]) / prices[-6])
+        # C. Momentum (Price change over last N periods)
+        momentum_idx = min(momentum_window, sample_size - 1)
+        momentum = float((current_price - prices[-momentum_idx - 1]) / prices[-momentum_idx - 1])
 
         # ------------------------------------------------------------------
         # 3. Risk Management Layer
@@ -142,23 +155,29 @@ class StrategyEngine:
             reason = "Ranging/Sideways market detected. No strong trend indicator present. Holding to prevent overtrading."
             confidence = 0.50
 
-        return self._build_response(action, confidence, reason, volatility, momentum)
+        # Reduce confidence if sample is small (30-50 points)
+        if low_sample:
+            confidence *= 0.7
+            reason += f" ⚠ Reduced confidence: analysis based on {sample_size} data points (recommend ≥{LOW_CONFIDENCE_THRESHOLD} for high-confidence signals)."
+
+        return self._build_response(action, confidence, reason, volatility, momentum, sample_size=sample_size)
 
     # ------------------------------------------------------------------
     # Formatting
     # ------------------------------------------------------------------
 
-    def _build_response(self, action: str, confidence: float, reason: str, vol: float, trend: float) -> dict:
+    def _build_response(self, action: str, confidence: float, reason: str, vol: float, trend: float, sample_size: int = 0) -> dict:
         """Constructs an output dictionary compatible with the frontend schema."""
         return {
-            "action":     action,
-            "score":      round(confidence, 4),    # Overload score with confidence for backward-compatibility
-            "confidence": round(confidence, 4),
-            "apy":        0.0,                     # Replaced by indicators, zeroed out
-            "volatility": round(vol, 4),
-            "trend":      round(trend, 4),
-            "reason":     reason,
-            "timestamp":  datetime.now(tz=timezone.utc).replace(tzinfo=None).isoformat(),
+            "action":      action,
+            "score":       round(confidence, 4),
+            "confidence":  round(confidence, 4),
+            "apy":         0.0,
+            "volatility":  round(vol, 4),
+            "trend":       round(trend, 4),
+            "reason":      reason,
+            "sample_size": sample_size,
+            "timestamp":   datetime.now(tz=timezone.utc).replace(tzinfo=None).isoformat(),
         }
 
 # ---------------------------------------------------------------------------
