@@ -70,24 +70,33 @@ async def _fetch_with_retry(url: str, params: dict = None, retries: int = 2) -> 
 # ---------------------------------------------------------------------------
 
 async def fetch_sol_price() -> float:
-    """Fetch live SOL price from Jupiter Aggregator."""
+    """Fetch live SOL price from CoinGecko API."""
     cache_key = "sol_price"
     cached = await global_cache.get(cache_key)
     if cached is not None:
         return cached
 
     try:
-        resp = await _fetch_with_retry(config.JUPITER_PRICE_URL, params={"ids": "SOL"})
-        price = float(resp.json()["data"]["SOL"]["price"])
-        print("[DATA] Source: Jupiter")
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        resp = await _fetch_with_retry(url, params={"ids": "solana", "vs_currencies": "usd"})
+        price = float(resp.json()["solana"]["usd"])
+        print("[DATA] Source: CoinGecko (SOL Price)")
         await global_cache.set(cache_key, price)
         return price
     except Exception as exc:
-        stale = await global_cache.get_stale(cache_key)
-        if stale is not None:
-            print("[DATA] Source: Cache (Fallback) - SOL Price")
-            return stale
-        return 150.0
+        try:
+            url = "https://api.binance.com/api/v3/ticker/price"
+            resp = await _fetch_with_retry(url, params={"symbol": "SOLUSDT"})
+            price = float(resp.json()["price"])
+            print("[DATA] Source: Binance (SOL Price)")
+            await global_cache.set(cache_key, price)
+            return price
+        except Exception as exc2:
+            stale = await global_cache.get_stale(cache_key)
+            if stale is not None:
+                print("[DATA] Source: Cache (Fallback) - SOL Price")
+                return stale
+            return 150.0
 
 
 # ---------------------------------------------------------------------------

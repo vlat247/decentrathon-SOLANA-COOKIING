@@ -1,23 +1,33 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LineChart, Line, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { LineChart, Line, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, XAxis } from 'recharts';
+
+const TIME_RANGES = [
+  { label: "1D", days: 1 },
+  { label: "1W", days: 7 },
+  { label: "1M", days: 30 },
+  { label: "1Y", days: 365 },
+];
 
 export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: number | null, liveSignal?: string | null }) {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [activeRange, setActiveRange] = useState(TIME_RANGES[0]);
 
   // STEP 2 & 6: Backend as Single Source of Truth
   useEffect(() => {
     async function fetchHistory() {
+      setLoading(true);
+      setError(false);
       try {
-        const res = await fetch("http://localhost:8000/api/price-history/SOL?days=1");
+        const res = await fetch(`http://localhost:8000/api/price-history/SOL?days=${activeRange.days}`);
         if (!res.ok) throw new Error("Failed to fetch from backend");
         const json = await res.json();
         
         // STEP 5: Add data flow clarity
-        console.log("PRICE HISTORY FROM BACKEND:", json);
+        console.log(`PRICE HISTORY FROM BACKEND (${activeRange.label}):`, json);
 
         if (!Array.isArray(json) || json.length === 0) {
             setError(true);
@@ -28,6 +38,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
         const formatted = json.map((pt: any) => ({
             price: Number(pt.price).toFixed(2),
             timestamp: pt.timestamp,
+            timeLabel: new Date(pt.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
             dotColor: 'transparent',
             dotRadius: 0
         }));
@@ -42,7 +53,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
     }
     
     fetchHistory();
-  }, []);
+  }, [activeRange.days]); // Refetch when range changes
 
   // Watch for new websocket data to append to the historical chart
   useEffect(() => {
@@ -64,6 +75,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
         
         newData.push({
           price: +(livePrice).toFixed(2),
+          timeLabel: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
           dotColor,
           dotRadius
         });
@@ -80,7 +92,7 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
   };
 
   // STEP 7: UI BEHAVIOR RULES
-  if (loading) {
+  if (loading && data.length === 0) {
       return (
         <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4 flex items-center justify-center h-[230px]">
             <span className="font-mono text-xs text-[var(--muted)] animate-pulse">Loading real market data from backend...</span>
@@ -100,12 +112,37 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
     <div className="bg-[var(--bg2)] border border-lp-border rounded-[10px] p-4">
       <div className="flex justify-between items-center mb-3">
         <div className="font-mono text-[10px] text-[var(--muted)] tracking-[2px]">SOL/USDC — Live Price & Decisions</div>
-        {/* STEP 8: Price Source Label */}
-        <div className="text-[10px] text-[var(--green)] opacity-80 border border-[var(--green)] px-2 py-0.5 rounded">
-            Price Source: Live Market (CoinGecko)
+        
+        <div className="flex items-center gap-3">
+          {/* Time Buttons */}
+          <div className="flex items-center gap-1">
+            {TIME_RANGES.map((range) => (
+              <button
+                key={range.label}
+                onClick={() => setActiveRange(range)}
+                className={`text-[10px] font-mono px-2 py-0.5 rounded transition-colors border ${
+                  activeRange.label === range.label
+                    ? "bg-[#a78bfa] text-[#1a1c24] border-[#a78bfa]"
+                    : "bg-transparent text-[var(--muted)] border-lp-border hover:text-[#a78bfa] hover:border-[#a78bfa]"
+                }`}
+              >
+                {range.label}
+              </button>
+            ))}
+          </div>
+          
+          {/* STEP 8: Price Source Label */}
+          <div className="text-[10px] text-[var(--green)] opacity-80 border border-[var(--green)] px-2 py-0.5 rounded">
+              Price Source: Live Market (CoinGecko)
+          </div>
         </div>
       </div>
       <div className="relative h-[180px] w-full min-h-[180px] min-w-[200px]">
+        {loading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#1a1c24]/60 font-mono text-xs text-[var(--muted)] rounded">
+             Updating chart data...
+          </div>
+        )}
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
             <defs>
@@ -115,8 +152,9 @@ export default function LivePriceChart({ livePrice, liveSignal }: { livePrice?: 
               </linearGradient>
             </defs>
             <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.04)" />
+            <XAxis dataKey="timeLabel" hide />
             <Line 
-              type="monotone" 
+              type="linear" 
               dataKey="price" 
               stroke="#a78bfa" 
               strokeWidth={2} 
